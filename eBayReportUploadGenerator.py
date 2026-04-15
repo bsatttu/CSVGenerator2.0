@@ -51,6 +51,7 @@ class eBayReportUploadGenerator:
         self.input_filename = self.config['inputData']['inputFileName']
         self.photoURLBeginning = self.config['DEFAULT']['photoURLBeginning']
         self.local_jpg_location = self.config['DEFAULT']['local_jpg_location']
+        self.sessions_directory = self.config.get_sessions_directory()
 
         self.ssh_host = self.config['ssh']['ssh_host']
         self.ssh_username = self.config['ssh']['ssh_username']
@@ -95,7 +96,17 @@ class eBayReportUploadGenerator:
         else:
             print("CAUTION!!!! No photo exists for this set short name: " + self.card_set_short)
 
-    def create_files(self):
+    def create_files(self, input_df=None, output_directory=None):
+        # If a DataFrame is passed in, operate on a copy and leave self.inputDF untouched.
+        # If not, fall back to the legacy behavior of using/mutating self.inputDF.
+        if input_df is not None:
+            working_df = input_df.copy(deep=True).reset_index(drop=True)
+        else:
+            working_df = self.inputDF
+
+        # Where to write the generated output CSVs
+        out_dir = output_directory if output_directory is not None else self.working_directory
+
         # Set values in top row
         self.outputDF.loc[0, 'StoreCategory'] = self.storeCategory
         self.outputDF.loc[0, 'PicURL'] = self.photoURLBeginning + self.card_set_short + ".jpg"
@@ -108,11 +119,14 @@ class eBayReportUploadGenerator:
         self.outputDF.loc[0, 'Quantity'] = ""
         self.outputDF.loc[0, 'StartPrice'] = ""
 
-        if self.include_zero_count or self.input_file_headers['count'] not in self.inputDF.columns:
-            self.number_of_rows = len(self.inputDF.index)
+        if self.include_zero_count or self.input_file_headers['count'] not in working_df.columns:
+            self.number_of_rows = len(working_df.index)
         else:
-            self.number_of_rows = (self.inputDF[self.input_file_headers['count']] != 0).sum()
-            self.inputDF = self.inputDF[self.inputDF[self.input_file_headers['count']] != 0].reset_index(drop=True)
+            self.number_of_rows = (working_df[self.input_file_headers['count']] != 0).sum()
+            working_df = working_df[working_df[self.input_file_headers['count']] != 0].reset_index(drop=True)
+            if input_df is None:
+                # Preserve legacy behavior: update self.inputDF when no explicit df was provided.
+                self.inputDF = working_df
         self.number_of_rows_per_file = 250
 
         # Determine number of rows per file
@@ -132,22 +146,25 @@ class eBayReportUploadGenerator:
         output_filename = ""
         relationship_details = "Number="
         outputDF_copy = self.outputDF.copy(deep=True)
-        for index in self.inputDF.index:
+        # Ensure output directory ends with a separator for string concatenation below
+        if out_dir and not out_dir.endswith(('/', '\\')):
+            out_dir = out_dir + '/'
+        for index in working_df.index:
             if index % self.number_of_rows_per_file == 0:
                 # This is the first row for the file, so set up file
                 self.outputDF = outputDF_copy.copy(deep=True)
                 relationship_details = "Number="
                 first_card_number = re.search(r'#(\S+)',
-                                              self.inputDF[self.input_file_headers['description']][index]).group(1)
+                                              working_df[self.input_file_headers['description']][index]).group(1)
                 last_card_number = ""
                 if self.number_of_rows_per_file < self.number_of_rows:
                     if index + self.number_of_rows_per_file < self.number_of_rows:
-                        last_card_number = re.search(r'#(\S+)', self.inputDF[self.input_file_headers['description']]
+                        last_card_number = re.search(r'#(\S+)', working_df[self.input_file_headers['description']]
                                                         [index + self.number_of_rows_per_file - 1]).group(1)
                     else:
-                        last_card_number = re.search(r'#(\S+)', self.inputDF[self.input_file_headers['description']]
+                        last_card_number = re.search(r'#(\S+)', working_df[self.input_file_headers['description']]
                                                         [self.number_of_rows - 1]).group(1)
-                    output_filename = self.working_directory + self.card_set_short + \
+                    output_filename = out_dir + self.card_set_short + \
                                            first_card_number + "-" + last_card_number + ".csv"
                     self.outputDF.loc[0, 'Title'] = self.get_list_title(self.card_set, self.sport_short,
                                                                         first_card_number, last_card_number,
@@ -155,13 +172,15 @@ class eBayReportUploadGenerator:
                 else:
                     self.outputDF.loc[0, 'Title'] = self.get_list_title(self.card_set, self.sport_short, "0", "0",
                                                                         self.box_number)
-                    output_filename = self.working_directory + self.card_set_short + ".csv"
+                    output_filename = out_dir + self.card_set_short + ".csv"
 
-            card_number = re.search(r'#(.*?)$', self.inputDF[self.input_file_headers['description']][index]).group(1)
+            card_number = re.search(r'#(.*?)$', working_df[self.input_file_headers['description']][index]).group(1)
 
             # Add the serial number to the description if it exists
-            if not math.isnan(self.inputDF[self.input_file_headers['serial_number']][index]):
-                card_number += " /" + str(int(self.inputDF[self.input_file_headers['serial_number']][index]))
+            serial_val = working_df[self.input_file_headers['serial_number']][index] \
+                if self.input_file_headers['serial_number'] in working_df.columns else float('nan')
+            if isinstance(serial_val, (int, float)) and not math.isnan(serial_val):
+                card_number += " /" + str(int(serial_val))
 
             if len(card_number) > 65:
                 # The Relationship line can only be 65 characters long
@@ -171,14 +190,14 @@ class eBayReportUploadGenerator:
             # Print the details for each line
             self.outputDF.loc[index + 1, 'RelationshipDetails'] = "Number=" + card_number
             self.outputDF.loc[index + 1, 'Relationship'] = "Variation"
-            if self.input_file_headers['price'] in self.inputDF.keys():
-                price = re.sub(r"\$", "", str(self.inputDF[self.input_file_headers['price']][index]))
+            if self.input_file_headers['price'] in working_df.keys():
+                price = re.sub(r"\$", "", str(working_df[self.input_file_headers['price']][index]))
             else:
                 price = self.default_price
             self.outputDF.loc[index + 1, 'StartPrice'] = price
 
-            if self.input_file_headers['count'] in self.inputDF.keys():
-                self.outputDF.loc[index + 1, 'Quantity'] = self.inputDF[self.input_file_headers['count']][index]
+            if self.input_file_headers['count'] in working_df.keys():
+                self.outputDF.loc[index + 1, 'Quantity'] = working_df[self.input_file_headers['count']][index]
             else:
                 self.outputDF.loc[index + 1, 'Quantity'] = "0"
 

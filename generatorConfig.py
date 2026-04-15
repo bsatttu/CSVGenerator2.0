@@ -1,8 +1,18 @@
+import os
 from configparser import ConfigParser
 
 
 class GeneratorConfigException(Exception):
     pass
+
+
+def get_default_sessions_directory():
+    """Return the platform-appropriate default sessions directory."""
+    appdata = os.environ.get('APPDATA')
+    if appdata:
+        return os.path.join(appdata, 'CSVGenerator', 'sessions') + os.sep
+    # Fallback for non-Windows platforms
+    return os.path.join(os.path.expanduser('~'), '.csvgenerator', 'sessions') + os.sep
 
 
 class GeneratorConfig(ConfigParser):
@@ -11,6 +21,15 @@ class GeneratorConfig(ConfigParser):
 
         self.read(config_file)
         self.validate_config()
+
+    def get_sessions_directory(self):
+        """Return the configured sessions directory, or the platform default if unset."""
+        if 'sessions_directory' in self['DEFAULT'] and self['DEFAULT']['sessions_directory']:
+            path = self['DEFAULT']['sessions_directory']
+            if not path.endswith(('/', '\\')):
+                path = path + os.sep
+            return path
+        return get_default_sessions_directory()
 
     def validate_config(self):
         required_values = {

@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c \"import ast; [ast.parse\\(open\\(p, encoding='utf-8'\\).read\\(\\), p\\) for p in ['main.py','eBayReportUploadGenerator.py','generatorConfig.py','session_manager.py','ui/__init__.py','ui/listings_model.py','ui/history_panel.py','ui/main_window.py']]; print\\('OK'\\)\")",
+      "Bash(f:/Projects/CSVGenerator2.0/.venv/Scripts/python.exe --version)",
+      "Bash(py -0)",
+      "Bash(where python *)"
+    ]
+  }
+}
